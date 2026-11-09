@@ -5,7 +5,7 @@ Guests can ask about house rules, find a free room, get the exact price of a sta
 in Traditional Chinese or English. Every answer comes from tools that read a SQLite database or calculate in code.
 
 > Course homework: Unit G (database + tools), **grown into the Midterm Project (Agent + RAG + LLM application)**
-> Student: [Student ID] [Your Name]
+> Student: [F115118136] [鄭淯蔚]
 
 ![Main screen of my agent, with the tool trace](images/screenshot-main.png)
 
@@ -121,8 +121,8 @@ sea-breeze-lane-agent/
 1. Download the project:
 
    ```bash
-   git clone https://github.com/[your-account]/[your-repo].git
-   cd [your-repo]
+   git clone https://github.com/yuweizheng0410-000/Midterm-Sea-Breeze-Lane-agent-with-tools-and-RAG
+   cd Midterm-Sea-Breeze-Lane-agent-with-tools-and-RAG
    ```
 
 2. Install the packages (Python 3.10 or newer):
