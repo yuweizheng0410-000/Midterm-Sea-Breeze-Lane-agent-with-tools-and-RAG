@@ -389,11 +389,21 @@ def create_booking_draft(room, check_in, check_out, guests, guest_name, phone,
                          "Nothing is saved until confirm_booking is called in a later message."}
 
 
-def confirm_booking(draft_id, _turn=0):
+def confirm_booking(draft_id="", _turn=0):
     with DRAFT_LOCK:
-        draft = BOOKING_DRAFTS.get(str(draft_id).strip())
+        draft_id = str(draft_id or "").strip()
+        draft = BOOKING_DRAFTS.get(draft_id)
         if not draft:
-            return {"saved": False, "error": f"No booking draft '{draft_id}'."}
+            # The model often forgets the draft id between messages (only text is kept in the history).
+            # Use the latest draft that was made in an EARLIER message of this chat.
+            earlier = [(k, v) for k, v in BOOKING_DRAFTS.items() if v["turn"] < _turn]
+            if earlier:
+                draft_id, draft = max(earlier, key=lambda kv: kv[0])
+        if not draft:
+            same_turn = any(v["turn"] >= _turn for v in BOOKING_DRAFTS.values())
+            return {"saved": False,
+                    "error": ("The customer has not confirmed yet. Show the summary and wait for their reply."
+                              if same_turn else "There is no booking draft. Call create_booking_draft first.")}
         # The program, not the prompt, makes sure the customer has seen the summary:
         # a draft cannot be confirmed in the same message that created it.
         if draft["turn"] >= _turn:
@@ -402,7 +412,7 @@ def confirm_booking(draft_id, _turn=0):
         data = draft["data"]
         d_in, d_out = parse_date(data["check_in"], "check_in"), parse_date(data["check_out"], "check_out")
         if data["room_id"] in booked_room_ids(d_in, d_out):
-            BOOKING_DRAFTS.pop(str(draft_id).strip())
+            BOOKING_DRAFTS.pop(draft_id, None)
             return {"saved": False, "error": "Sorry, the room was booked by someone else in the meantime."}
         count = query("SELECT COUNT(*) AS n FROM bookings")[0]["n"]
         booking_id = f"B{count + 1:04d}"
@@ -410,7 +420,7 @@ def confirm_booking(draft_id, _turn=0):
                 "guests, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed')",
                 (booking_id, data["room_id"], data["guest_name"], data["phone"],
                  data["check_in"], data["check_out"], data["guests"]))
-        BOOKING_DRAFTS.pop(str(draft_id).strip())
+        BOOKING_DRAFTS.pop(draft_id, None)
     return {"saved": True, "booking_id": booking_id, **data,
             "next_step": "Pay the 30% deposit by bank transfer within 3 days."}
 
@@ -476,8 +486,8 @@ def tool_specs():
             "description": "Step 2 of booking. Save a booking draft to the database. Call it ONLY after the "
                            "customer has seen the summary and replied that they confirm.",
             "parameters": {"type": "object", "properties": {
-                "draft_id": {"type": "string", "description": "The draft_id from create_booking_draft."}},
-                "required": ["draft_id"]}}},
+                "draft_id": {"type": "string", "description": "The draft_id from create_booking_draft, if you know it."}},
+                "required": []}}},
         {"type": "function", "function": {
             "name": "search_inn_guide",
             "description": "Search the inn's long guide (RAG): detailed house rules (noise, late arrival, late check-out, "
@@ -547,7 +557,7 @@ You must NEVER:
   * detailed rules, "can I... / what if...", typhoon, refund, children, late arrival, BBQ, bikes, travel tips -> search_inn_guide (RAG); answer ONLY from the sections it returns
   * room types, guests per room, price per night, free rooms on dates -> search_rooms
   * "how much is a stay" -> calculate_stay_cost
-  * a booking -> ask for name, phone, dates and guests, call create_booking_draft, show the summary and ask the guest to confirm. Call confirm_booking only after the guest replies that they confirm, in a NEW message.
+  * a booking -> ask for name, phone, dates and guests, call create_booking_draft, show the summary (with its draft_id) and ask the guest to confirm. Call confirm_booking only after the guest replies that they confirm, in a NEW message. When the guest confirms, call confirm_booking right away; do NOT call create_booking_draft again.
   * complaints, compensation, refunds, changing an existing booking, "a staff member promised me...", asking for a manager -> transfer_to_human
 - If an error says a date is in the past, or a stay is too long, or a room cannot hold the guests, explain it and ask for new dates or another room. Do not transfer for these.
 - If a tool returns found=false or another error, never guess. Follow section 4.
