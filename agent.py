@@ -5,6 +5,7 @@ This file has no user interface. app.py (Gradio) and test_tool_choice.py both im
 """
 
 import csv
+import itertools
 import json
 import os
 import re
@@ -361,6 +362,7 @@ def transfer_to_human(reason):
 # draft_id -> {"turn": turn number when the draft was made, "data": {...}}
 BOOKING_DRAFTS = {}
 DRAFT_LOCK = threading.Lock()
+DRAFT_COUNTER = itertools.count(1)
 
 
 def create_booking_draft(room, check_in, check_out, guests, guest_name, phone,
@@ -375,16 +377,31 @@ def create_booking_draft(room, check_in, check_out, guests, guest_name, phone,
     if room_id in booked_room_ids(parse_date(check_in, "check_in"), parse_date(check_out, "check_out")):
         return {"created": False, "error": f"{cost['room']['name']} is already booked on these dates."}
 
+    data = {"room_id": room_id, "guest_name": str(guest_name).strip(), "phone": str(phone).strip(),
+            "check_in": cost["check_in"], "check_out": cost["check_out"], "guests": int(guests)}
+    summary = {"room": cost["room"], "guest_name": data["guest_name"], "phone": data["phone"],
+               "guests": int(guests), "check_in": cost["check_in"],
+               "check_out": cost["check_out"], "nights": cost["nights"],
+               "total": cost["total"], "deposit_30_percent": cost["deposit_30_percent"]}
+
     with DRAFT_LOCK:
-        draft_id = f"D{len(BOOKING_DRAFTS) + 1:04d}"
-        BOOKING_DRAFTS[draft_id] = {"turn": _turn, "data": {
-            "room_id": room_id, "guest_name": str(guest_name).strip(), "phone": str(phone).strip(),
-            "check_in": cost["check_in"], "check_out": cost["check_out"], "guests": int(guests)}}
-    return {"created": True, "draft_id": draft_id, "saved": False,
-            "summary": {"room": cost["room"], "guest_name": guest_name, "phone": phone,
-                        "guests": int(guests), "check_in": cost["check_in"],
-                        "check_out": cost["check_out"], "nights": cost["nights"],
-                        "total": cost["total"], "deposit_30_percent": cost["deposit_30_percent"]},
+        # The model often asks for the same draft again when the guest says "confirm" (it forgets the
+        # draft id). If an identical draft is already waiting, give that one back. Its turn stays the
+        # same, so confirm_booking sees that the guest has already seen the summary.
+        for old_id, old in BOOKING_DRAFTS.items():
+            if old["data"] == data:
+                if old["turn"] < _turn:
+                    return {"created": True, "draft_id": old_id, "saved": False, "summary": summary,
+                            "already_shown_to_customer": True,
+                            "next_step": "This draft was already shown to the customer in an earlier message. "
+                                         "If the customer just replied that they confirm, call "
+                                         f"confirm_booking now with draft_id '{old_id}'. Do not ask again."}
+                return {"created": True, "draft_id": old_id, "saved": False, "summary": summary,
+                        "next_step": "Show this summary and ask the customer to reply 'confirm'. "
+                                     "Nothing is saved until confirm_booking is called in a later message."}
+        draft_id = f"D{next(DRAFT_COUNTER):04d}"               # never reused, even after a draft is removed
+        BOOKING_DRAFTS[draft_id] = {"turn": _turn, "data": data}
+    return {"created": True, "draft_id": draft_id, "saved": False, "summary": summary,
             "next_step": "Show this summary and ask the customer to reply 'confirm'. "
                          "Nothing is saved until confirm_booking is called in a later message."}
 
